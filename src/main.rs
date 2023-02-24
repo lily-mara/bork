@@ -15,12 +15,23 @@ use eyre::{bail, eyre, Context, Result};
 use msgpack::{Bytes, PythonValue};
 use serde::Deserialize;
 
+#[cfg(test)]
+mod tests;
+
 mod msgpack;
 
 const MANIFEST_ID: [u8; 32] = [0; 32];
 
 fn main() -> Result<()> {
-    let repository = Repository::load(PathBuf::from(std::env::args().nth(1).unwrap()))?;
+    let path = PathBuf::from(std::env::args().nth(1).unwrap());
+
+    extract(path)?;
+
+    Ok(())
+}
+
+fn extract(path: PathBuf) -> Result<()> {
+    let repository = Repository::load(path)?;
 
     let mut items = HashMap::<Vec<u8>, Vec<u8>>::new();
 
@@ -67,11 +78,17 @@ fn main() -> Result<()> {
                                 rmp_serde::from_read::<_, ItemMetadata>(&mut cursor)?;
 
                             println!("{}", item_metadata.path);
+
+                            let subbed_path = item_metadata.path.replace("/", "__");
+
                             for (id, _, _) in &item_metadata.chunks {
                                 if let Some(chunk) = items.get(&id.0) {
                                     let data = unpack_data(&chunk)?;
 
-                                    std::fs::write("example/extracted", data)?;
+                                    std::fs::write(
+                                        format!("example/extracted/{subbed_path}"),
+                                        data,
+                                    )?;
                                 }
                             }
                         }
