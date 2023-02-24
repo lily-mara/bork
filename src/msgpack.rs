@@ -161,6 +161,17 @@ impl<'de> Visitor<'de> for ValueVisitor {
     {
         Ok(PythonValue::U128(v))
     }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut v = Vec::new();
+        while let Ok(Some(x)) = seq.next_element() {
+            v.push(x);
+        }
+        Ok(PythonValue::Sequence(v))
+    }
 }
 
 pub struct Bytes(pub Vec<u8>);

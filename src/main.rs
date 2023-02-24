@@ -22,38 +22,82 @@ const MANIFEST_ID: [u8; 32] = [0; 32];
 fn main() -> Result<()> {
     let repository = Repository::load(PathBuf::from(std::env::args().nth(1).unwrap()))?;
 
-    // dbg!(&repository);
+    let mut items = HashMap::<Vec<u8>, Vec<u8>>::new();
 
     for segment in repository.segments()? {
-        println!("SEGMENT {}", segment.id);
         for entry in segment.open()? {
             let entry = entry?;
-            println!("{entry:?}");
 
-            if let LogEntry::Put { key, data } = &entry {
-                if *key == MANIFEST_ID {
-                    let data = unpack_data(data)?;
-                    std::fs::write(hex_str(key), &data)?;
-
-                    let manifest = rmp_serde::decode::from_slice::<Manifest>(&data)
-                        .wrap_err("decode manifest msgpack")?;
-                    dbg!(manifest);
+            match entry {
+                LogEntry::Put { key, data } => {
+                    items.insert(key.into(), data);
                 }
+                LogEntry::Delete { key } => {
+                    items.remove(&Vec::from(key));
+                }
+                LogEntry::Commit => {}
             }
         }
 
         println!();
     }
 
-    for index in repository.indices()? {
-        dbg!(&index, index.open()?);
+    if let Some(manifest_data) = items.get(&Vec::from(MANIFEST_ID)) {
+        let data = unpack_data(&manifest_data)?;
+
+        let manifest =
+            rmp_serde::decode::from_slice::<Manifest>(&data).wrap_err("decode manifest msgpack")?;
+        dbg!(&manifest);
+
+        for (_, manifest_archive) in manifest.archives {
+            if let Some(archive_data) = items.get(&manifest_archive.id.0) {
+                let data = unpack_data(&archive_data)?;
+
+                let archive = rmp_serde::from_slice::<Archive>(&data)?;
+                dbg!(&archive);
+
+                for item_id in &archive.items {
+                    if let Some(item_data) = items.get(&item_id.0) {
+                        let data = unpack_data(&item_data)?;
+
+                        let mut cursor = std::io::Cursor::new(data);
+
+                        while cursor_has_data(&cursor) {
+                            let item_metadata =
+                                rmp_serde::from_read::<_, ItemMetadata>(&mut cursor)?;
+
+                            println!("{}", item_metadata.path);
+                            for (id, _, _) in &item_metadata.chunks {
+                                if let Some(chunk) = items.get(&id.0) {
+                                    let data = unpack_data(&chunk)?;
+
+                                    std::fs::write("example/extracted", data)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    for hint in repository.hints()? {
-        dbg!(hint);
-    }
+    // for index in repository.indices()? {
+    //     dbg!(&index, index.open()?);
+    // }
+
+    // for hint in repository.hints()? {
+    //     dbg!(hint);
+    // }
 
     Ok(())
+}
+
+/// Determine if there is remaining data for the cursor to read. Returns true if
+/// there is still data to read, false if there is no data left to read
+fn cursor_has_data(data: &std::io::Cursor<Vec<u8>>) -> bool {
+    let len = data.get_ref().len();
+
+    (data.position() as usize) < len - 1
 }
 
 /// Reads the data segment from a PUT log entry and removes the encryption and
@@ -65,16 +109,20 @@ fn unpack_data(data: &[u8]) -> Result<Vec<u8>> {
         bail!("only plaintext data is supported");
     }
 
-    if data
+    let compression_tag = data
         .read_u16::<LittleEndian>()
-        .wrap_err("read compression")?
-        != 0x00_01
-    {
-        bail!("only lz4 compression is supported");
-    }
+        .wrap_err("read compression")?;
 
     let position = data.position() as usize;
     let sliced_data = &data.into_inner()[position..];
+
+    if compression_tag == 0x00_00 {
+        return Ok(sliced_data.to_vec());
+    }
+
+    if compression_tag != 0x00_01 {
+        bail!("only lz4 compression is supported");
+    }
 
     let mut size = sliced_data.len() * 3;
     loop {
@@ -133,6 +181,15 @@ struct Manifest {
 }
 
 #[derive(Deserialize, Debug)]
+struct ItemMetadata {
+    // TODO: this is wrong! Not all paths are utf-8 silly!
+    path: String,
+
+    #[serde(default)]
+    chunks: Vec<(Bytes, PythonValue, PythonValue)>,
+}
+
+#[derive(Deserialize, Debug)]
 struct Tam {
     #[serde(rename = "type")]
     tipe: String,
@@ -163,8 +220,17 @@ struct Repository {
     id: String,
 }
 
+#[derive(Deserialize, Debug)]
 struct Archive {
-    path: PathBuf,
+    version: u8,
+    name: String,
+    items: Vec<Bytes>,
+    cmdline: Vec<String>,
+    hostname: String,
+    username: String,
+    time: String,
+    time_end: String,
+    comment: String,
 }
 
 #[derive(Debug)]
@@ -305,10 +371,6 @@ impl Segment {
             _ => bail!("Unknown hashindex magic number: {:?}", data),
         }
     }
-}
-
-impl Archive {
-    fn items(&self) {}
 }
 
 impl Index {
