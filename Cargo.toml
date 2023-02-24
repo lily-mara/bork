@@ -1,0 +1,16 @@
+[package]
+name = "bork"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+byteorder = "1.4.3"
+clap = { version = "4.1.6", features = ["derive"] }
+configparser = "3.0.2"
+eyre = "0.6.8"
+flate2 = "1.0.25"
+rmp-serde = "1.1.1"
+rmp = "0.8"
+serde = { version = "1.0.152", features = ["derive"] }
+lz4 = "1.24.0"
